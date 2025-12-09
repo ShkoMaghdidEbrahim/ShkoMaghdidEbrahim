@@ -4,9 +4,8 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="10e6ce42-b9a9-43d2-b4e7-d72b362930ec" name="Changes" comment="Update GitHub Actions workflow dependencies to latest versions">
-      <change beforePath="$PROJECT_DIR$/dark_mode.svg" beforeDir="false" afterPath="$PROJECT_DIR$/dark_mode.svg" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/light_mode.svg" beforeDir="false" afterPath="$PROJECT_DIR$/light_mode.svg" afterDir="false" />
+    <list default="true" id="10e6ce42-b9a9-43d2-b4e7-d72b362930ec" name="Changes" comment="Updated light_mode.svg and dark_mode.svg for enhanced clarity and consistency&#10;&#10;- Refined programming stack display and replaced shorthand notations with full names.&#10;- Improved alignment and updated metrics (commits and LOC) to reflect recent changes.&#10;- Adjusted `.idea` workspace settings and tasks for better integration.">
+      <change beforePath="$PROJECT_DIR$/.github/workflows/build.yaml" beforeDir="false" afterPath="$PROJECT_DIR$/.github/workflows/build.yaml" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -74,7 +73,7 @@
       <updated>1765312149852</updated>
       <workItem from="1765312151206" duration="1505000" />
       <workItem from="1765314236389" duration="36000" />
-      <workItem from="1765314275334" duration="4480000" />
+      <workItem from="1765314275334" duration="4562000" />
     </task>
     <task id="LOCAL-00001" summary="Add GitHub profile README with dynamic SVG stats and migration settings&#10;&#10;- Created `.idea` configuration files for migration services with &quot;COMPLETED&quot; status.&#10;- Added `README.md` with light/dark mode SVGs.&#10;- Implemented `today.py` script for dynamic stat generation via GitHub GraphQL.&#10;- Included additional resources: cache, requirements, and inspection profiles.">
       <option name="closed" value="true" />
@@ -124,7 +123,15 @@
       <option name="project" value="LOCAL" />
       <updated>1765318826735</updated>
     </task>
-    <option name="localTasksCounter" value="7" />
+    <task id="LOCAL-00007" summary="Updated light_mode.svg and dark_mode.svg for enhanced clarity and consistency&#10;&#10;- Refined programming stack display and replaced shorthand notations with full names.&#10;- Improved alignment and updated metrics (commits and LOC) to reflect recent changes.&#10;- Adjusted `.idea` workspace settings and tasks for better integration.">
+      <option name="closed" value="true" />
+      <created>1765319017832</created>
+      <option name="number" value="00007" />
+      <option name="presentableId" value="LOCAL-00007" />
+      <option name="project" value="LOCAL" />
+      <updated>1765319017832</updated>
+    </task>
+    <option name="localTasksCounter" value="8" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -150,6 +157,7 @@
     <MESSAGE value="Refactor `today.py` to streamline code structure and enhance readability&#10;&#10;- Removed extensive in-line comments and redundant docstrings.&#10;- Simplified method implementations for GitHub GraphQL API usage.&#10;- Improved SVG formatting with dynamic element spacing adjustments.&#10;- Updated `.idea` files for compatibility and migration configurations." />
     <MESSAGE value="Refactored `today.py` for improved readability and functionality, updated `.idea` configuration&#10;&#10;- Simplified `today.py` by removing redundant comments and streamlining functions.&#10;- Added `.idea/misc.xml` for Python SDK configuration.&#10;- Made additional refinements in `.idea/workspace.xml` to enhance integration and workflow management." />
     <MESSAGE value="Update GitHub Actions workflow dependencies to latest versions" />
-    <option name="LAST_COMMIT_MESSAGE" value="Update GitHub Actions workflow dependencies to latest versions" />
+    <MESSAGE value="Updated light_mode.svg and dark_mode.svg for enhanced clarity and consistency&#10;&#10;- Refined programming stack display and replaced shorthand notations with full names.&#10;- Improved alignment and updated metrics (commits and LOC) to reflect recent changes.&#10;- Adjusted `.idea` workspace settings and tasks for better integration." />
+    <option name="LAST_COMMIT_MESSAGE" value="Updated light_mode.svg and dark_mode.svg for enhanced clarity and consistency&#10;&#10;- Refined programming stack display and replaced shorthand notations with full names.&#10;- Improved alignment and updated metrics (commits and LOC) to reflect recent changes.&#10;- Adjusted `.idea` workspace settings and tasks for better integration." />
   </component>
 </project>
