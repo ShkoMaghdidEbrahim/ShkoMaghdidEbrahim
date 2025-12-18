@@ -1,0 +1,374 @@
+Index: today.py
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>import datetime\nfrom dateutil import relativedelta\nimport requests\nimport os\nfrom lxml import etree\nimport time\nimport hashlib\n\nHEADERS = {'authorization': 'token ' + os.environ['ACCESS_TOKEN']}\nUSER_NAME = os.environ['USER_NAME']\nQUERY_COUNT = {'user_getter': 0, 'follower_getter': 0, 'graph_repos_stars': 0, 'recursive_loc': 0, 'graph_commits': 0,\n               'loc_query': 0}\n\n\ndef daily_readme(birthday):\n    diff = relativedelta.relativedelta(datetime.datetime.today(), birthday)\n    return '{} {}, {} {}, {} {}{}'.format(\n        diff.years, 'year' + format_plural(diff.years),\n        diff.months, 'month' + format_plural(diff.months),\n        diff.days, 'day' + format_plural(diff.days),\n        ' \uD83C\uDF82' if (diff.months == 0 and diff.days == 0) else '')\n\n\ndef format_plural(unit):\n    return 's' if unit != 1 else ''\n\n\ndef simple_request(func_name, query, variables):\n    request = requests.post('https://api.github.com/graphql', json={'query': query, 'variables': variables},\n                            headers=HEADERS)\n    if request.status_code == 200:\n        return request\n    raise Exception(func_name, ' has failed with a', request.status_code, request.text, QUERY_COUNT)\n\n\ndef graph_commits():\n    query_count('graph_commits')\n    query = '''\n    query($login: String!) {\n        user(login: $login) {\n            contributionsCollection {\n                contributionCalendar {\n                    totalContributions\n                }\n            }\n        }\n    }'''\n    variables = {'login': USER_NAME}\n    request = simple_request(graph_commits.__name__, query, variables)\n    data = request.json()['data']['user']['contributionsCollection']\n    return int(data['contributionCalendar']['totalContributions'])\n\n\ndef graph_repos_stars(count_type, owner_affiliation, cursor=None):\n    query_count('graph_repos_stars')\n    query = '''\n    query ($owner_affiliation: [RepositoryAffiliation], $login: String!, $cursor: String) {\n        user(login: $login) {\n            repositories(first: 100, after: $cursor, ownerAffiliations: $owner_affiliation) {\n                totalCount\n                edges {\n                    node {\n                        ... on Repository {\n                            nameWithOwner\n                            stargazers {\n                                totalCount\n                            }\n                        }\n                    }\n                }\n                pageInfo {\n                    endCursor\n                    hasNextPage\n                }\n            }\n        }\n    }'''\n    variables = {'owner_affiliation': owner_affiliation, 'login': USER_NAME, 'cursor': cursor}\n    request = simple_request(graph_repos_stars.__name__, query, variables)\n    if request.status_code == 200:\n        if count_type == 'repos':\n            return request.json()['data']['user']['repositories']['totalCount']\n        elif count_type == 'stars':\n            return stars_counter(request.json()['data']['user']['repositories']['edges'])\n\n\ndef recursive_loc(owner, repo_name, data, cache_comment, addition_total=0, deletion_total=0, my_commits=0, cursor=None):\n    query_count('recursive_loc')\n    query = '''\n    query ($repo_name: String!, $owner: String!, $cursor: String) {\n        repository(name: $repo_name, owner: $owner) {\n            defaultBranchRef {\n                target {\n                    ... on Commit {\n                        history(first: 100, after: $cursor) {\n                            totalCount\n                            edges {\n                                node {\n                                    ... on Commit {\n                                        committedDate\n                                    }\n                                    author {\n                                        user {\n                                            id\n                                        }\n                                    }\n                                    deletions\n                                    additions\n                                }\n                            }\n                            pageInfo {\n                                endCursor\n                                hasNextPage\n                            }\n                        }\n                    }\n                }\n            }\n        }\n    }'''\n    variables = {'repo_name': repo_name, 'owner': owner, 'cursor': cursor}\n    request = requests.post('https://api.github.com/graphql', json={'query': query, 'variables': variables},\n                            headers=HEADERS)\n    if request.status_code == 200:\n        if request.json()['data']['repository']['defaultBranchRef'] != None:\n            return loc_counter_one_repo(owner, repo_name, data, cache_comment,\n                                        request.json()['data']['repository']['defaultBranchRef']['target']['history'],\n                                        addition_total, deletion_total, my_commits)\n        else:\n            return 0\n    force_close_file(data, cache_comment)\n    if request.status_code == 403:\n        raise Exception(\n            'Too many requests in a short amount of time!\\nYou\\'ve hit the non-documented anti-abuse limit!')\n    raise Exception('recursive_loc() has failed with a', request.status_code, request.text, QUERY_COUNT)\n\n\ndef loc_counter_one_repo(owner, repo_name, data, cache_comment, history, addition_total, deletion_total, my_commits):\n    for node in history['edges']:\n        if node['node']['author']['user'] == OWNER_ID:\n            my_commits += 1\n            addition_total += node['node']['additions']\n            deletion_total += node['node']['deletions']\n\n    if history['edges'] == [] or not history['pageInfo']['hasNextPage']:\n        return addition_total, deletion_total, my_commits\n    else:\n        return recursive_loc(owner, repo_name, data, cache_comment, addition_total, deletion_total, my_commits,\n                             history['pageInfo']['endCursor'])\n\n\ndef loc_query(owner_affiliation, comment_size=0, force_cache=False, cursor=None, edges=[]):\n    query_count('loc_query')\n    query = '''\n    query ($owner_affiliation: [RepositoryAffiliation], $login: String!, $cursor: String) {\n        user(login: $login) {\n            repositories(first: 60, after: $cursor, ownerAffiliations: $owner_affiliation) {\n            edges {\n                node {\n                    ... on Repository {\n                        nameWithOwner\n                        defaultBranchRef {\n                            target {\n                                ... on Commit {\n                                    history {\n                                        totalCount\n                                        }\n                                    }\n                                }\n                            }\n                        }\n                    }\n                }\n                pageInfo {\n                    endCursor\n                    hasNextPage\n                }\n            }\n        }\n    }'''\n    variables = {'owner_affiliation': owner_affiliation, 'login': USER_NAME, 'cursor': cursor}\n    request = simple_request(loc_query.__name__, query, variables)\n    if request.json()['data']['user']['repositories']['pageInfo']['hasNextPage']:\n        edges += request.json()['data']['user']['repositories']['edges']\n        return loc_query(owner_affiliation, comment_size, force_cache,\n                         request.json()['data']['user']['repositories']['pageInfo']['endCursor'], edges)\n    else:\n        return cache_builder(edges + request.json()['data']['user']['repositories']['edges'], comment_size, force_cache)\n\n\ndef cache_builder(edges, comment_size, force_cache, loc_add=0, loc_del=0):\n    edges = [e for e in edges if e is not None and e.get('node') is not None]\n    cached = True\n    filename = 'cache/' + hashlib.sha256(USER_NAME.encode('utf-8')).hexdigest() + '.txt'\n    try:\n        with open(filename, 'r') as f:\n            data = f.readlines()\n    except FileNotFoundError:\n        data = []\n        if comment_size > 0:\n            for _ in range(comment_size): data.append('This line is a comment block. Write whatever you want here.\\n')\n        with open(filename, 'w') as f:\n            f.writelines(data)\n\n    if len(data) - comment_size != len(edges) or force_cache:\n        cached = False\n        flush_cache(edges, filename, comment_size)\n        with open(filename, 'r') as f:\n            data = f.readlines()\n\n    cache_comment = data[:comment_size]\n    data = data[comment_size:]\n    for index in range(len(edges)):\n        repo_hash, commit_count, *__ = data[index].split()\n        if repo_hash == hashlib.sha256(edges[index]['node']['nameWithOwner'].encode('utf-8')).hexdigest():\n            try:\n                if int(commit_count) != edges[index]['node']['defaultBranchRef']['target']['history']['totalCount']:\n                    owner, repo_name = edges[index]['node']['nameWithOwner'].split('/')\n                    loc = recursive_loc(owner, repo_name, data, cache_comment)\n                    data[index] = repo_hash + ' ' + str(\n                        edges[index]['node']['defaultBranchRef']['target']['history']['totalCount']) + ' ' + str(\n                        loc[2]) + ' ' + str(loc[0]) + ' ' + str(loc[1]) + '\\n'\n            except TypeError:\n                data[index] = repo_hash + ' 0 0 0 0\\n'\n    with open(filename, 'w') as f:\n        f.writelines(cache_comment)\n        f.writelines(data)\n    for line in data:\n        loc = line.split()\n        loc_add += int(loc[3])\n        loc_del += int(loc[4])\n    return [loc_add, loc_del, loc_add - loc_del, cached]\n\n\ndef flush_cache(edges, filename, comment_size):\n    with open(filename, 'r') as f:\n        data = []\n        if comment_size > 0:\n            data = f.readlines()[:comment_size]\n    with open(filename, 'w') as f:\n        f.writelines(data)\n        for node in edges:\n            if node.get('node') is not None and node['node'].get('nameWithOwner') is not None:\n                f.write(hashlib.sha256(node['node']['nameWithOwner'].encode('utf-8')).hexdigest() + ' 0 0 0 0\\n')\n\n\ndef force_close_file(data, cache_comment):\n    filename = 'cache/' + hashlib.sha256(USER_NAME.encode('utf-8')).hexdigest() + '.txt'\n    with open(filename, 'w') as f:\n        f.writelines(cache_comment)\n        f.writelines(data)\n    print('There was an error while writing to the cache file. The file,', filename,\n          'has had the partial data saved and closed.')\n\n\ndef stars_counter(data):\n    total_stars = 0\n    for node in data: total_stars += node['node']['stargazers']['totalCount']\n    return total_stars\n\n\ndef svg_overwrite(filename, age_data, commit_data, star_data, repo_data, contrib_data, follower_data, loc_data):\n    tree = etree.parse(filename)\n    root = tree.getroot()\n    justify_format(root, 'age_data', age_data, 90)\n    justify_format(root, 'commit_data', commit_data, 39)\n    justify_format(root, 'star_data', star_data, 40)\n    justify_format(root, 'repo_data', repo_data, 24)\n    justify_format(root, 'contrib_data', contrib_data, 0)\n    justify_format(root, 'follower_data', follower_data, 36)\n    justify_format(root, 'loc_data', loc_data[2], 49)\n    justify_format(root, 'loc_add', loc_data[0], 0)\n    justify_format(root, 'loc_del', loc_data[1], 0)\n    tree.write(filename, encoding='utf-8', xml_declaration=True)\n\n\ndef justify_format(root, element_id, new_text, total_width):\n    if isinstance(new_text, int):\n        new_text = f\"{'{:,}'.format(new_text)}\"\n    new_text = str(new_text)\n    find_and_replace(root, element_id, new_text)\n\n    if total_width > 0:\n        dots_needed = total_width - len(new_text)\n        if dots_needed <= 0:\n            dot_string = ''\n        elif dots_needed == 1:\n            dot_string = ' '\n        elif dots_needed == 2:\n            dot_string = '. '\n        else:\n            dot_string = ' ' + ('.' * (dots_needed - 2)) + ' '\n        find_and_replace(root, f\"{element_id}_dots\", dot_string)\n\n\ndef find_and_replace(root, element_id, new_text):\n    element = root.find(f\".//*[@id='{element_id}']\")\n    if element is not None:\n        element.text = new_text\n\n\ndef user_getter(username):\n    query_count('user_getter')\n    query = '''\n    query($login: String!){\n        user(login: $login) {\n            id\n            createdAt\n        }\n    }'''\n    variables = {'login': username}\n    request = simple_request(user_getter.__name__, query, variables)\n    return {'id': request.json()['data']['user']['id']}, request.json()['data']['user']['createdAt']\n\n\ndef follower_getter(username):\n    query_count('follower_getter')\n    query = '''\n    query($login: String!){\n        user(login: $login) {\n            followers {\n                totalCount\n            }\n        }\n    }'''\n    request = simple_request(follower_getter.__name__, query, {'login': username})\n    return int(request.json()['data']['user']['followers']['totalCount'])\n\n\ndef query_count(funct_id):\n    global QUERY_COUNT\n    QUERY_COUNT[funct_id] += 1\n\n\ndef perf_counter(funct, *args):\n    start = time.perf_counter()\n    funct_return = funct(*args)\n    return funct_return, time.perf_counter() - start\n\n\ndef formatter(query_type, difference, funct_return=False, whitespace=0):\n    print('{:<23}'.format('   ' + query_type + ':'), sep='', end='')\n    print('{:>12}'.format('%.4f' % difference + ' s ')) if difference > 1 else print(\n        '{:>12}'.format('%.4f' % (difference * 1000) + ' ms'))\n    if whitespace:\n        return f\"{'{:,}'.format(funct_return): <{whitespace}}\"\n    return funct_return\n\n\nif __name__ == '__main__':\n    print('Calculation times:')\n    user_data, user_time = perf_counter(user_getter, USER_NAME)\n    OWNER_ID, acc_date = user_data\n    formatter('account data', user_time)\n    age_data, age_time = perf_counter(daily_readme, datetime.datetime(2003, 1, 14))\n    formatter('age calculation', age_time)\n    total_loc, loc_time = perf_counter(loc_query, ['OWNER', 'COLLABORATOR', 'ORGANIZATION_MEMBER'], 7)\n    formatter('LOC (cached)', loc_time) if total_loc[-1] else formatter('LOC (no cache)', loc_time)\n\n    commit_data, commit_time = perf_counter(graph_commits)\n    star_data, star_time = perf_counter(graph_repos_stars, 'stars', ['OWNER'])\n    repo_data, repo_time = perf_counter(graph_repos_stars, 'repos', ['OWNER'])\n    contrib_data, contrib_time = perf_counter(graph_repos_stars, 'repos',\n                                              ['OWNER', 'COLLABORATOR', 'ORGANIZATION_MEMBER'])\n    follower_data, follower_time = perf_counter(follower_getter, USER_NAME)\n\n    for index in range(len(total_loc) - 1): total_loc[index] = '{:,}'.format(total_loc[index])\n\n    svg_overwrite('dark_mode.svg', age_data, commit_data, star_data, repo_data, contrib_data, follower_data,\n                  total_loc[:-1])\n    svg_overwrite('light_mode.svg', age_data, commit_data, star_data, repo_data, contrib_data, follower_data,\n                  total_loc[:-1])\n\n    print('\\033[F\\033[F\\033[F\\033[F\\033[F\\033[F\\033[F\\033[F',\n          '{:<21}'.format('Total function time:'),\n          '{:>11}'.format(\n              '%.4f' % (user_time + age_time + loc_time + commit_time + star_time + repo_time + contrib_time)),\n          ' s \\033[E\\033[E\\033[E\\033[E\\033[E\\033[E\\033[E\\033[E', sep='')\n\n    print('Total GitHub GraphQL API calls:', '{:>3}'.format(sum(QUERY_COUNT.values())))\n    for funct_name, count in QUERY_COUNT.items(): print('{:<28}'.format('   ' + funct_name + ':'),\n                                                        '{:>6}'.format(count))\n
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/today.py b/today.py
+--- a/today.py	(revision 4c9efe2bcd5768305a04d5a16f2a5ff2ddb4377e)
++++ b/today.py	(date 1766075803787)
+@@ -5,6 +5,7 @@
+ from lxml import etree
+ import time
+ import hashlib
++import re
+ 
+ HEADERS = {'authorization': 'token ' + os.environ['ACCESS_TOKEN']}
+ USER_NAME = os.environ['USER_NAME']
+@@ -259,12 +260,43 @@
+     return total_stars
+ 
+ 
+-def svg_overwrite(filename, age_data, commit_data, star_data, repo_data, contrib_data, follower_data, loc_data):
++def committers_rank_getter(username, country='iraq'):
++    url = f"https://user-badge.committers.top/{country}/{username}.svg"
++    response = requests.get(url, timeout=15)
++    if response.status_code != 200:
++        raise Exception('committers_rank_getter has failed with a', response.status_code, response.text)
++    return extract_rank_from_committers_svg(response.text)
++
++
++def extract_rank_from_committers_svg(svg_text):
++    match = re.search(r"#\s*([0-9][0-9,]*)", svg_text)
++    if match:
++        return int(match.group(1).replace(',', ''))
++
++    try:
++        root = etree.fromstring(svg_text.encode('utf-8'))
++        texts = [t for t in root.itertext() if t is not None]
++        normalized = ' '.join(' '.join(texts).split())
++    except Exception:
++        normalized = svg_text
++
++    match = re.search(r"\b(?:rank|ranking)\b\D{0,30}([0-9][0-9,]*)", normalized, flags=re.IGNORECASE)
++    if match:
++        return int(match.group(1).replace(',', ''))
++
++    match = re.search(r"\b([0-9][0-9,]*)\b", normalized)
++    if match:
++        return int(match.group(1).replace(',', ''))
++
++    raise ValueError('Could not extract rank from committers.top SVG')
++
++
++def svg_overwrite(filename, age_data, commit_data, rank_data, repo_data, contrib_data, follower_data, loc_data):
+     tree = etree.parse(filename)
+     root = tree.getroot()
+     justify_format(root, 'age_data', age_data, 90)
+     justify_format(root, 'commit_data', commit_data, 39)
+-    justify_format(root, 'star_data', star_data, 40)
++    justify_format(root, 'rank_data', rank_data, 18)
+     justify_format(root, 'repo_data', repo_data, 24)
+     justify_format(root, 'contrib_data', contrib_data, 0)
+     justify_format(root, 'follower_data', follower_data, 36)
+@@ -358,7 +390,7 @@
+     formatter('LOC (cached)', loc_time) if total_loc[-1] else formatter('LOC (no cache)', loc_time)
+ 
+     commit_data, commit_time = perf_counter(graph_commits)
+-    star_data, star_time = perf_counter(graph_repos_stars, 'stars', ['OWNER'])
++    rank_data, rank_time = perf_counter(committers_rank_getter, USER_NAME)
+     repo_data, repo_time = perf_counter(graph_repos_stars, 'repos', ['OWNER'])
+     contrib_data, contrib_time = perf_counter(graph_repos_stars, 'repos',
+                                               ['OWNER', 'COLLABORATOR', 'ORGANIZATION_MEMBER'])
+@@ -366,15 +398,15 @@
+ 
+     for index in range(len(total_loc) - 1): total_loc[index] = '{:,}'.format(total_loc[index])
+ 
+-    svg_overwrite('dark_mode.svg', age_data, commit_data, star_data, repo_data, contrib_data, follower_data,
++    svg_overwrite('dark_mode.svg', age_data, commit_data, rank_data, repo_data, contrib_data, follower_data,
+                   total_loc[:-1])
+-    svg_overwrite('light_mode.svg', age_data, commit_data, star_data, repo_data, contrib_data, follower_data,
++    svg_overwrite('light_mode.svg', age_data, commit_data, rank_data, repo_data, contrib_data, follower_data,
+                   total_loc[:-1])
+ 
+     print('\033[F\033[F\033[F\033[F\033[F\033[F\033[F\033[F',
+           '{:<21}'.format('Total function time:'),
+           '{:>11}'.format(
+-              '%.4f' % (user_time + age_time + loc_time + commit_time + star_time + repo_time + contrib_time)),
++              '%.4f' % (user_time + age_time + loc_time + commit_time + rank_time + repo_time + contrib_time)),
+           ' s \033[E\033[E\033[E\033[E\033[E\033[E\033[E\033[E', sep='')
+ 
+     print('Total GitHub GraphQL API calls:', '{:>3}'.format(sum(QUERY_COUNT.values())))
+Index: README.md
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+><a href=\"https://github.com/ShkoMaghdidEbrahim/ShkoMaghdidEbrahim\">\n  <picture>\n    <source media=\"(prefers-color-scheme: dark)\" srcset=\"https://raw.githubusercontent.com/ShkoMaghdidEbrahim/ShkoMaghdidEbrahim/main/dark_mode.svg\">\n    <img alt=\"ShkoMaghdidEbrahim's GitHub Profile README\" src=\"https://raw.githubusercontent.com/ShkoMaghdidEbrahim/ShkoMaghdidEbrahim/main/light_mode.svg\">\n  </picture>\n</a>\n
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/README.md b/README.md
+--- a/README.md	(revision 4c9efe2bcd5768305a04d5a16f2a5ff2ddb4377e)
++++ b/README.md	(date 1766076130161)
+@@ -1,6 +1,6 @@
+-<a href="https://github.com/ShkoMaghdidEbrahim/ShkoMaghdidEbrahim">
++<a href="https://github.com/OneAboveAll1964/OneAboveAll1964">
+   <picture>
+-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/ShkoMaghdidEbrahim/ShkoMaghdidEbrahim/main/dark_mode.svg">
+-    <img alt="ShkoMaghdidEbrahim's GitHub Profile README" src="https://raw.githubusercontent.com/ShkoMaghdidEbrahim/ShkoMaghdidEbrahim/main/light_mode.svg">
++    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/OneAboveAll1964/OneAboveAll1964/main/dark_mode.svg">
++    <img alt="OneAboveAll1964's GitHub Profile README" src="https://raw.githubusercontent.com/OneAboveAll1964/OneAboveAll1964/main/light_mode.svg">
+   </picture>
+ </a>
+Index: light_mode.svg
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+><?xml version='1.0' encoding='UTF-8'?>\n<svg xmlns=\"http://www.w3.org/2000/svg\" font-family=\"ConsolasFallback,Consolas,monospace\" width=\"985px\" height=\"530px\" font-size=\"16px\">\n<style>\n@font-face {\nsrc: local('Consolas'), local('Consolas Bold');\nfont-family: 'ConsolasFallback';\nfont-display: swap;\n-webkit-size-adjust: 109%;\nsize-adjust: 109%;\n}\n.key {fill: #953800;}\n.value {fill: #0a3069;}\n.addColor {fill: #1a7f37;}\n.delColor {fill: #cf222e;}\n.cc {fill: #c2cfde;}\ntext, tspan {white-space: pre;}\n</style>\n<rect width=\"985px\" height=\"500px\" fill=\"#f6f8fa\" rx=\"15\"/>\n<text x=\"15\" y=\"30\" fill=\"#24292f\">\n<tspan x=\"15\" y=\"30\">shko@maghdid</tspan> -——————————————————————————————————————————————————————————————————————————————————-—-\n<tspan x=\"15\" y=\"50\" class=\"cc\">. </tspan><tspan class=\"key\">OS</tspan>:<tspan class=\"cc\"> ................................................................. </tspan><tspan class=\"value\">macOS(main), Windows, Linux</tspan>\n<tspan x=\"15\" y=\"70\" class=\"cc\">. </tspan><tspan class=\"key\">Uptime</tspan>:<tspan class=\"cc\" id=\"age_data_dots\"> ............................................................ </tspan><tspan class=\"value\" id=\"age_data\">22 years, 10 months, 25 days</tspan>\n<tspan x=\"15\" y=\"90\" class=\"cc\">. </tspan><tspan class=\"key\">Host</tspan>:<tspan class=\"cc\"> .................................................................................... </tspan><tspan class=\"value\">Lezzoo</tspan>\n<tspan x=\"15\" y=\"110\" class=\"cc\">. </tspan><tspan class=\"key\">Kernel</tspan>:<tspan class=\"cc\"> ...................................................................... </tspan><tspan class=\"value\">Fullstack Engineer</tspan>\n<tspan x=\"15\" y=\"130\" class=\"cc\">. </tspan><tspan class=\"key\">IDE</tspan>:<tspan class=\"cc\"> ................................................................................... </tspan><tspan class=\"value\">WebStorm</tspan>\n<tspan x=\"15\" y=\"150\" class=\"cc\">. </tspan>\n<tspan x=\"15\" y=\"170\" class=\"cc\">. </tspan><tspan class=\"key\">Languages</tspan>.<tspan class=\"key\">Programming</tspan>:<tspan class=\"cc\"> ..................................... </tspan><tspan class=\"value\">JavaScript, TypeScript, Java, Python</tspan>\n<tspan x=\"15\" y=\"190\" class=\"cc\">. </tspan><tspan class=\"key\">Languages</tspan>.<tspan class=\"key\">Stack</tspan>:<tspan class=\"cc\"> ................................... </tspan><tspan class=\"value\">React, React Native, Electron, NodeJS, MySQL</tspan>\n<tspan x=\"15\" y=\"210\" class=\"cc\">. </tspan><tspan class=\"key\">Languages</tspan>.<tspan class=\"key\">Styling</tspan>:<tspan class=\"cc\"> .......................................................... </tspan><tspan class=\"value\">CSS, Tailwind, SCSS</tspan>\n<tspan x=\"15\" y=\"230\" class=\"cc\">. </tspan>\n<tspan x=\"15\" y=\"250\" class=\"cc\">. </tspan><tspan class=\"key\">Languages</tspan>.<tspan class=\"key\">Real</tspan>:<tspan class=\"cc\"> ........................................................ </tspan><tspan class=\"value\">Kurdish, Arabic, English</tspan>\n<tspan x=\"15\" y=\"270\" class=\"cc\">. </tspan><tspan class=\"key\">Hobbies</tspan>.<tspan class=\"key\">Software</tspan>:<tspan class=\"cc\"> ...................................................... </tspan><tspan class=\"value\">Adobe Illustrator, Figma</tspan>\n<tspan x=\"15\" y=\"290\" class=\"cc\">. </tspan><tspan class=\"key\">Hobbies</tspan>.<tspan class=\"key\">Main</tspan>:<tspan class=\"cc\"> ............................................................. </tspan><tspan class=\"value\">Android Customization</tspan>\n<tspan x=\"15\" y=\"330\">- Contact</tspan> -—————————————————————————————————————————————————————————————————————————————————————-—-\n<tspan x=\"15\" y=\"350\" class=\"cc\">. </tspan><tspan class=\"key\">Email</tspan>:<tspan class=\"cc\"> ................................................................... </tspan><tspan class=\"value\">shkoma.ranya@gmail.com</tspan>\n<tspan x=\"15\" y=\"370\" class=\"cc\">. </tspan><tspan class=\"key\">LinkedIn</tspan>:<tspan class=\"cc\"> .......................................................................... </tspan><tspan class=\"value\">Shko Maghdid</tspan>\n<tspan x=\"15\" y=\"410\">- GitHub Stats</tspan> -————————————————————————————————————————————————————————————————————————————————-—-\n<tspan x=\"15\" y=\"430\" class=\"cc\">. </tspan><tspan class=\"key\">Repos</tspan>:<tspan class=\"cc\" id=\"repo_data_dots\"> .................... </tspan><tspan class=\"value\" id=\"repo_data\">52</tspan> {<tspan class=\"key\">Contributed</tspan>: <tspan class=\"value\" id=\"contrib_data\">62</tspan>} | <tspan class=\"key\">Stars</tspan>:<tspan class=\"cc\" id=\"star_data_dots\"> ..................................... </tspan><tspan class=\"value\" id=\"star_data\">0</tspan>\n<tspan x=\"15\" y=\"450\" class=\"cc\">. </tspan><tspan class=\"key\">Commmits</tspan>:<tspan class=\"cc\" id=\"commit_data_dots\"> ................................ </tspan><tspan class=\"value\" id=\"commit_data\">2,350</tspan> | <tspan class=\"key\">Followers</tspan>:<tspan class=\"cc\" id=\"follower_data_dots\"> ................................ </tspan><tspan class=\"value\" id=\"follower_data\">12</tspan>\n<tspan x=\"15\" y=\"470\" class=\"cc\">. </tspan><tspan class=\"key\">Lines of Code on GitHub</tspan>:<tspan class=\"cc\" id=\"loc_data_dots\"> ........................................ </tspan><tspan class=\"value\" id=\"loc_data\">390,968</tspan> ( <tspan class=\"addColor\" id=\"loc_add\">464,095</tspan><tspan class=\"addColor\">++</tspan>, <tspan class=\"delColor\" id=\"loc_del\">73,127</tspan><tspan class=\"delColor\">--</tspan> )\n</text>\n</svg>
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/light_mode.svg b/light_mode.svg
+--- a/light_mode.svg	(revision 4c9efe2bcd5768305a04d5a16f2a5ff2ddb4377e)
++++ b/light_mode.svg	(date 1766076059780)
+@@ -19,7 +19,7 @@
+ <text x="15" y="30" fill="#24292f">
+ <tspan x="15" y="30">shko@maghdid</tspan> -——————————————————————————————————————————————————————————————————————————————————-—-
+ <tspan x="15" y="50" class="cc">. </tspan><tspan class="key">OS</tspan>:<tspan class="cc"> ................................................................. </tspan><tspan class="value">macOS(main), Windows, Linux</tspan>
+-<tspan x="15" y="70" class="cc">. </tspan><tspan class="key">Uptime</tspan>:<tspan class="cc" id="age_data_dots"> ............................................................ </tspan><tspan class="value" id="age_data">22 years, 10 months, 25 days</tspan>
++<tspan x="15" y="70" class="cc">. </tspan><tspan class="key">Uptime</tspan>:<tspan class="cc" id="age_data_dots"> ............................................................. </tspan><tspan class="value" id="age_data">22 years, 11 months, 4 days</tspan>
+ <tspan x="15" y="90" class="cc">. </tspan><tspan class="key">Host</tspan>:<tspan class="cc"> .................................................................................... </tspan><tspan class="value">Lezzoo</tspan>
+ <tspan x="15" y="110" class="cc">. </tspan><tspan class="key">Kernel</tspan>:<tspan class="cc"> ...................................................................... </tspan><tspan class="value">Fullstack Engineer</tspan>
+ <tspan x="15" y="130" class="cc">. </tspan><tspan class="key">IDE</tspan>:<tspan class="cc"> ................................................................................... </tspan><tspan class="value">WebStorm</tspan>
+@@ -35,8 +35,8 @@
+ <tspan x="15" y="350" class="cc">. </tspan><tspan class="key">Email</tspan>:<tspan class="cc"> ................................................................... </tspan><tspan class="value">shkoma.ranya@gmail.com</tspan>
+ <tspan x="15" y="370" class="cc">. </tspan><tspan class="key">LinkedIn</tspan>:<tspan class="cc"> .......................................................................... </tspan><tspan class="value">Shko Maghdid</tspan>
+ <tspan x="15" y="410">- GitHub Stats</tspan> -————————————————————————————————————————————————————————————————————————————————-—-
+-<tspan x="15" y="430" class="cc">. </tspan><tspan class="key">Repos</tspan>:<tspan class="cc" id="repo_data_dots"> .................... </tspan><tspan class="value" id="repo_data">52</tspan> {<tspan class="key">Contributed</tspan>: <tspan class="value" id="contrib_data">62</tspan>} | <tspan class="key">Stars</tspan>:<tspan class="cc" id="star_data_dots"> ..................................... </tspan><tspan class="value" id="star_data">0</tspan>
+-<tspan x="15" y="450" class="cc">. </tspan><tspan class="key">Commmits</tspan>:<tspan class="cc" id="commit_data_dots"> ................................ </tspan><tspan class="value" id="commit_data">2,350</tspan> | <tspan class="key">Followers</tspan>:<tspan class="cc" id="follower_data_dots"> ................................ </tspan><tspan class="value" id="follower_data">12</tspan>
+-<tspan x="15" y="470" class="cc">. </tspan><tspan class="key">Lines of Code on GitHub</tspan>:<tspan class="cc" id="loc_data_dots"> ........................................ </tspan><tspan class="value" id="loc_data">390,968</tspan> ( <tspan class="addColor" id="loc_add">464,095</tspan><tspan class="addColor">++</tspan>, <tspan class="delColor" id="loc_del">73,127</tspan><tspan class="delColor">--</tspan> )
++<tspan x="15" y="430" class="cc">. </tspan><tspan class="key">Repos</tspan>:<tspan class="cc" id="repo_data_dots"> .................... </tspan><tspan class="value" id="repo_data">52</tspan> {<tspan class="key">Contributed</tspan>: <tspan class="value" id="contrib_data">62</tspan>} | <tspan class="key">Github Contributors Rank</tspan>:<tspan class="cc" id="rank_data_dots"> ............. </tspan><tspan class="value" id="rank_data">555</tspan>
++<tspan x="15" y="450" class="cc">. </tspan><tspan class="key">Commmits</tspan>:<tspan class="cc" id="commit_data_dots"> ................................ </tspan><tspan class="value" id="commit_data">2,399</tspan> | <tspan class="key">Followers</tspan>:<tspan class="cc" id="follower_data_dots"> ................................ </tspan><tspan class="value" id="follower_data">13</tspan>
++<tspan x="15" y="470" class="cc">. </tspan><tspan class="key">Lines of Code on GitHub</tspan>:<tspan class="cc" id="loc_data_dots"> ........................................ </tspan><tspan class="value" id="loc_data">393,919</tspan> ( <tspan class="addColor" id="loc_add">467,424</tspan><tspan class="addColor">++</tspan>, <tspan class="delColor" id="loc_del">73,505</tspan><tspan class="delColor">--</tspan> )
+ </text>
+ </svg>
+\ No newline at end of file
+Index: dark_mode.svg
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+><?xml version='1.0' encoding='UTF-8'?>\n<svg xmlns=\"http://www.w3.org/2000/svg\" font-family=\"ConsolasFallback,Consolas,monospace\" width=\"985px\" height=\"530px\" font-size=\"16px\">\n<style>\n@font-face {\nsrc: local('Consolas'), local('Consolas Bold');\nfont-family: 'ConsolasFallback';\nfont-display: swap;\n-webkit-size-adjust: 109%;\nsize-adjust: 109%;\n}\n.key {fill: #ffa657;}\n.value {fill: #a5d6ff;}\n.addColor {fill: #3fb950;}\n.delColor {fill: #f85149;}\n.cc {fill: #616e7f;}\ntext, tspan {white-space: pre;}\n</style>\n<rect width=\"985px\" height=\"500px\" fill=\"#161b22\" rx=\"15\"/>\n<text x=\"15\" y=\"30\" fill=\"#c9d1d9\">\n<tspan x=\"15\" y=\"30\">shko@maghdid</tspan> -——————————————————————————————————————————————————————————————————————————————————-—-\n<tspan x=\"15\" y=\"50\" class=\"cc\">. </tspan><tspan class=\"key\">OS</tspan>:<tspan class=\"cc\"> ................................................................. </tspan><tspan class=\"value\">macOS(main), Windows, Linux</tspan>\n<tspan x=\"15\" y=\"70\" class=\"cc\">. </tspan><tspan class=\"key\">Uptime</tspan>:<tspan class=\"cc\" id=\"age_data_dots\"> ............................................................ </tspan><tspan class=\"value\" id=\"age_data\">22 years, 10 months, 25 days</tspan>\n<tspan x=\"15\" y=\"90\" class=\"cc\">. </tspan><tspan class=\"key\">Host</tspan>:<tspan class=\"cc\"> .................................................................................... </tspan><tspan class=\"value\">Lezzoo</tspan>\n<tspan x=\"15\" y=\"110\" class=\"cc\">. </tspan><tspan class=\"key\">Kernel</tspan>:<tspan class=\"cc\"> ...................................................................... </tspan><tspan class=\"value\">Fullstack Engineer</tspan>\n<tspan x=\"15\" y=\"130\" class=\"cc\">. </tspan><tspan class=\"key\">IDE</tspan>:<tspan class=\"cc\"> ................................................................................... </tspan><tspan class=\"value\">WebStorm</tspan>\n<tspan x=\"15\" y=\"150\" class=\"cc\">. </tspan>\n<tspan x=\"15\" y=\"170\" class=\"cc\">. </tspan><tspan class=\"key\">Languages</tspan>.<tspan class=\"key\">Programming</tspan>:<tspan class=\"cc\"> ..................................... </tspan><tspan class=\"value\">JavaScript, TypeScript, Java, Python</tspan>\n<tspan x=\"15\" y=\"190\" class=\"cc\">. </tspan><tspan class=\"key\">Languages</tspan>.<tspan class=\"key\">Stack</tspan>:<tspan class=\"cc\"> ................................... </tspan><tspan class=\"value\">React, React Native, Electron, NodeJS, MySQL</tspan>\n<tspan x=\"15\" y=\"210\" class=\"cc\">. </tspan><tspan class=\"key\">Languages</tspan>.<tspan class=\"key\">Styling</tspan>:<tspan class=\"cc\"> .......................................................... </tspan><tspan class=\"value\">CSS, Tailwind, SCSS</tspan>\n<tspan x=\"15\" y=\"230\" class=\"cc\">. </tspan>\n<tspan x=\"15\" y=\"250\" class=\"cc\">. </tspan><tspan class=\"key\">Languages</tspan>.<tspan class=\"key\">Real</tspan>:<tspan class=\"cc\"> ........................................................ </tspan><tspan class=\"value\">Kurdish, Arabic, English</tspan>\n<tspan x=\"15\" y=\"270\" class=\"cc\">. </tspan><tspan class=\"key\">Hobbies</tspan>.<tspan class=\"key\">Software</tspan>:<tspan class=\"cc\"> ...................................................... </tspan><tspan class=\"value\">Adobe Illustrator, Figma</tspan>\n<tspan x=\"15\" y=\"290\" class=\"cc\">. </tspan><tspan class=\"key\">Hobbies</tspan>.<tspan class=\"key\">Main</tspan>:<tspan class=\"cc\"> ............................................................. </tspan><tspan class=\"value\">Android Customization</tspan>\n<tspan x=\"15\" y=\"330\">- Contact</tspan> -—————————————————————————————————————————————————————————————————————————————————————-—-\n<tspan x=\"15\" y=\"350\" class=\"cc\">. </tspan><tspan class=\"key\">Email</tspan>:<tspan class=\"cc\"> ................................................................... </tspan><tspan class=\"value\">shkoma.ranya@gmail.com</tspan>\n<tspan x=\"15\" y=\"370\" class=\"cc\">. </tspan><tspan class=\"key\">LinkedIn</tspan>:<tspan class=\"cc\"> .......................................................................... </tspan><tspan class=\"value\">Shko Maghdid</tspan>\n<tspan x=\"15\" y=\"410\">- GitHub Stats</tspan> -————————————————————————————————————————————————————————————————————————————————-—-\n<tspan x=\"15\" y=\"430\" class=\"cc\">. </tspan><tspan class=\"key\">Repos</tspan>:<tspan class=\"cc\" id=\"repo_data_dots\"> .................... </tspan><tspan class=\"value\" id=\"repo_data\">52</tspan> {<tspan class=\"key\">Contributed</tspan>: <tspan class=\"value\" id=\"contrib_data\">62</tspan>} | <tspan class=\"key\">Stars</tspan>:<tspan class=\"cc\" id=\"star_data_dots\"> ..................................... </tspan><tspan class=\"value\" id=\"star_data\">0</tspan>\n<tspan x=\"15\" y=\"450\" class=\"cc\">. </tspan><tspan class=\"key\">Commmits</tspan>:<tspan class=\"cc\" id=\"commit_data_dots\"> ................................ </tspan><tspan class=\"value\" id=\"commit_data\">2,350</tspan> | <tspan class=\"key\">Followers</tspan>:<tspan class=\"cc\" id=\"follower_data_dots\"> ................................ </tspan><tspan class=\"value\" id=\"follower_data\">12</tspan>\n<tspan x=\"15\" y=\"470\" class=\"cc\">. </tspan><tspan class=\"key\">Lines of Code on GitHub</tspan>:<tspan class=\"cc\" id=\"loc_data_dots\"> ........................................ </tspan><tspan class=\"value\" id=\"loc_data\">390,968</tspan> ( <tspan class=\"addColor\" id=\"loc_add\">464,095</tspan><tspan class=\"addColor\">++</tspan>, <tspan class=\"delColor\" id=\"loc_del\">73,127</tspan><tspan class=\"delColor\">--</tspan> )\n</text>\n</svg>
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/dark_mode.svg b/dark_mode.svg
+--- a/dark_mode.svg	(revision 4c9efe2bcd5768305a04d5a16f2a5ff2ddb4377e)
++++ b/dark_mode.svg	(date 1766076059778)
+@@ -19,7 +19,7 @@
+ <text x="15" y="30" fill="#c9d1d9">
+ <tspan x="15" y="30">shko@maghdid</tspan> -——————————————————————————————————————————————————————————————————————————————————-—-
+ <tspan x="15" y="50" class="cc">. </tspan><tspan class="key">OS</tspan>:<tspan class="cc"> ................................................................. </tspan><tspan class="value">macOS(main), Windows, Linux</tspan>
+-<tspan x="15" y="70" class="cc">. </tspan><tspan class="key">Uptime</tspan>:<tspan class="cc" id="age_data_dots"> ............................................................ </tspan><tspan class="value" id="age_data">22 years, 10 months, 25 days</tspan>
++<tspan x="15" y="70" class="cc">. </tspan><tspan class="key">Uptime</tspan>:<tspan class="cc" id="age_data_dots"> ............................................................. </tspan><tspan class="value" id="age_data">22 years, 11 months, 4 days</tspan>
+ <tspan x="15" y="90" class="cc">. </tspan><tspan class="key">Host</tspan>:<tspan class="cc"> .................................................................................... </tspan><tspan class="value">Lezzoo</tspan>
+ <tspan x="15" y="110" class="cc">. </tspan><tspan class="key">Kernel</tspan>:<tspan class="cc"> ...................................................................... </tspan><tspan class="value">Fullstack Engineer</tspan>
+ <tspan x="15" y="130" class="cc">. </tspan><tspan class="key">IDE</tspan>:<tspan class="cc"> ................................................................................... </tspan><tspan class="value">WebStorm</tspan>
+@@ -35,8 +35,8 @@
+ <tspan x="15" y="350" class="cc">. </tspan><tspan class="key">Email</tspan>:<tspan class="cc"> ................................................................... </tspan><tspan class="value">shkoma.ranya@gmail.com</tspan>
+ <tspan x="15" y="370" class="cc">. </tspan><tspan class="key">LinkedIn</tspan>:<tspan class="cc"> .......................................................................... </tspan><tspan class="value">Shko Maghdid</tspan>
+ <tspan x="15" y="410">- GitHub Stats</tspan> -————————————————————————————————————————————————————————————————————————————————-—-
+-<tspan x="15" y="430" class="cc">. </tspan><tspan class="key">Repos</tspan>:<tspan class="cc" id="repo_data_dots"> .................... </tspan><tspan class="value" id="repo_data">52</tspan> {<tspan class="key">Contributed</tspan>: <tspan class="value" id="contrib_data">62</tspan>} | <tspan class="key">Stars</tspan>:<tspan class="cc" id="star_data_dots"> ..................................... </tspan><tspan class="value" id="star_data">0</tspan>
+-<tspan x="15" y="450" class="cc">. </tspan><tspan class="key">Commmits</tspan>:<tspan class="cc" id="commit_data_dots"> ................................ </tspan><tspan class="value" id="commit_data">2,350</tspan> | <tspan class="key">Followers</tspan>:<tspan class="cc" id="follower_data_dots"> ................................ </tspan><tspan class="value" id="follower_data">12</tspan>
+-<tspan x="15" y="470" class="cc">. </tspan><tspan class="key">Lines of Code on GitHub</tspan>:<tspan class="cc" id="loc_data_dots"> ........................................ </tspan><tspan class="value" id="loc_data">390,968</tspan> ( <tspan class="addColor" id="loc_add">464,095</tspan><tspan class="addColor">++</tspan>, <tspan class="delColor" id="loc_del">73,127</tspan><tspan class="delColor">--</tspan> )
++<tspan x="15" y="430" class="cc">. </tspan><tspan class="key">Repos</tspan>:<tspan class="cc" id="repo_data_dots"> .................... </tspan><tspan class="value" id="repo_data">52</tspan> {<tspan class="key">Contributed</tspan>: <tspan class="value" id="contrib_data">62</tspan>} | <tspan class="key">Github Contributors Rank</tspan>:<tspan class="cc" id="rank_data_dots"> ............. </tspan><tspan class="value" id="rank_data">555</tspan>
++<tspan x="15" y="450" class="cc">. </tspan><tspan class="key">Commmits</tspan>:<tspan class="cc" id="commit_data_dots"> ................................ </tspan><tspan class="value" id="commit_data">2,399</tspan> | <tspan class="key">Followers</tspan>:<tspan class="cc" id="follower_data_dots"> ................................ </tspan><tspan class="value" id="follower_data">13</tspan>
++<tspan x="15" y="470" class="cc">. </tspan><tspan class="key">Lines of Code on GitHub</tspan>:<tspan class="cc" id="loc_data_dots"> ........................................ </tspan><tspan class="value" id="loc_data">393,919</tspan> ( <tspan class="addColor" id="loc_add">467,424</tspan><tspan class="addColor">++</tspan>, <tspan class="delColor" id="loc_del">73,505</tspan><tspan class="delColor">--</tspan> )
+ </text>
+ </svg>
+\ No newline at end of file
+Index: cache/3c602b29c40b778847fb76f04a127ddbcba0678c0c67c3052dd7c939fce19682.txt
+===================================================================
+diff --git a/cache/3c602b29c40b778847fb76f04a127ddbcba0678c0c67c3052dd7c939fce19682.txt b/cache/3c602b29c40b778847fb76f04a127ddbcba0678c0c67c3052dd7c939fce19682.txt
+deleted file mode 100644
+--- a/cache/3c602b29c40b778847fb76f04a127ddbcba0678c0c67c3052dd7c939fce19682.txt	(revision 4c9efe2bcd5768305a04d5a16f2a5ff2ddb4377e)
++++ /dev/null	(revision 4c9efe2bcd5768305a04d5a16f2a5ff2ddb4377e)
+@@ -1,69 +0,0 @@
+-This line is a comment block. Write whatever you want here.
+-This line is a comment block. Write whatever you want here.
+-This line is a comment block. Write whatever you want here.
+-This line is a comment block. Write whatever you want here.
+-This line is a comment block. Write whatever you want here.
+-This line is a comment block. Write whatever you want here.
+-This line is a comment block. Write whatever you want here.
+-010606950d6231f96b7555426f288475e36e5516dd7489e2adf9341f84aebc23 381 1 32 0
+-61e4411adf66a66f8fea32da9350dc002b46b04b0f71b1ccd6d8071a17beb719 4 0 0 0
+-b0140fd67bd48350ccffa617b29eff314f9fd11c49f35bc4c6af8b078c15af2c 6 6 1508 22
+-a5f3a8c9b18f2800e5240888c6eefc9cd1f165f8c0fd8a4d25b91f3a84d0053e 4 4 583 26
+-38067b307d4cdfd903307d4918c2458089db4f4b259658070b065bb2b4dc6795 3 3 1156 1
+-5fb27fb14aed40b78321af1a7d7cf0ab2d466b9476d1ad50e3c17e08349e6f36 3 3 759 1
+-cf24d3a7106254b0207dfa0405aa3e19756615816506870cf3e74dfa204f2eb4 2 2 2001 0
+-5ffa01ff2b24cb80b72d809a51e11767b3cb4273ba9e6f59f01a93316d85fd1c 2 2 483 0
+-8847c21bd7205aa7ef5d7fb57967bf08b46ed87402806a4b6dceddc6c230ee8c 2 2 384 0
+-b3ab5c89cf6e07374a0863b5d51add45d66e9eb83fc9c84ea2fb0c7dff7c8571 2 2 226 0
+-7400eb48eee3e1052208afbc3a11cdbf6278b338af9e52d959866207fba1671d 2 2 473 0
+-ac214b067ce488d8a995d33b41996fe40d83327da0ebaebc6124a54447ee37f5 2 2 346 0
+-ff66d7177e40b1b9f7c05a84892e69996cf8fa8e1d48b94b18ee3847a4a1ad23 5 5 184 55
+-5bd7c3910c878610d2887b964e6d7c5a038a6587ba35ffee9063ea8cc058b029 2 2 355 0
+-ddb23f771622f0c66b3b5279bdf30ecec90c20546dea85e2014c4090dc7aadde 2 2 156 0
+-966144db0d76841510b8592a39922b26e1fc553badfd4e82f14c2d83e392980f 5 5 34367 2
+-ff15f3cbf6be6e36d84ea79a29cb47a5afb3698e0d26bb18de4d2d8e1d1dda0b 3 3 40799 1
+-92f8d5a48462988186d5785c860332cc6ea0bc1edd085c997ad919cd555b0b1c 2 2 154 0
+-75087b411a8bf55db09b34f20cc71e4c9ae484d5b29b2f18852018aed3cf46d9 2 2 132 0
+-79853ae38b578c71e32ac68f45c8ff6e585b0de64188a4188e314f5f0e138cf4 3 3 5395 519
+-6152a0201d54778d7a9ef7c0cae23cbba8e1b6589379b566372413a51f4d36b7 18 18 5744 1141
+-cf17d8696c5241162a78c4cb8b4547d61180e31f7a07d0ec578270b32ca623d8 0 0 0 0
+-3f6d62a313e3bfc6a018c9ff027bf4f377c5a899e0bed76758542c4129debb1f 1 1 1506 0
+-0111daf6e418f674f9f92de46d8d73ace405a852c254967fbf5ff37e9521c1ff 383 2 15 6
+-aef58de6aaeedc871b44741e5e84624af6f8b4d502443487e850be366529f7c0 8 6 15508 11356
+-b9e993f8c843d68df5d4a18cf9596d9a18fbd95b128e93d12606a67bb3e0a64e 17 15 2348 322
+-4dbb9866647c80b2f37aa190e30cefff505799d9b01996037d84f580cd9f6690 0 0 0 0
+-d3b13e4526629afae59e30e1152e9e3406fa46ece2cebe71df13377c07dab42b 60 18 679 401
+-7dceb910851a8ecaff9d0506cac6c4e8ac8dc53d6588345c32662109f71aa2c6 2 2 81 0
+-b4d28baa5cb50d2e6ece3b45ffd7433d0b27e2433f7741e136d45ff568dc2b16 130 32 30755 4905
+-3e242086558d35ab81743528d465d5ba303f13709c22cc673cf9ad4b2be6dac2 9 9 77971 10
+-905c4ed772274806a59675b136bd25d56ec44b74781f76284a37094de0a326fc 67 67 17064 1804
+-1f92efb753a1fa079605a1663d1eb6c3b154b95ea40773de4476abd0519f9cf8 10 10 15180 282
+-22697dcf7e5088a1e29dab5305a7a96ccaf1e85ee1777438bdd54585abb62114 7 7 726 129
+-82e0a44d0b9294e46516bde8a92d2ca7402ed205f166b53751e20304e6b6b635 1 1 7917 0
+-94473d9490bd795c09e4d51bcc54e6bf917a6210a66614c99073bb44315d7b22 21 21 11286 889
+-ed07cdcadf2361da0b6ec7a06fb50319a77d11da872fbd0296225ba0729e479a 13 13 11501 1055
+-0c60421c9ec82676b3cc1900866b0377e9108bc7a3dfe7fd49b307ac09c3052e 242 4 188 97
+-6c494b4c1dbdc8f178c4bc8606c0dc6dc59696f92e8a4a2f66325b97b7f8eb7d 6 0 0 0
+-4cc7ecf37229ade7414cb97b68299cd9166741a653cf8b9a716828afe2ca27e3 88 83 8182 2007
+-96537f850261440410e787bc52a6991bfd39ac90e587af043e33883d26da458e 10 10 20703 1374
+-f59f2bb505e8f1fcc2eba065d545debd819bebeb20caa0699014432723008fa7 3 3 16619 11316
+-7c2a8ebe81806708fcad7a512aecfe519532df1c07860ad5f99238b9f4342524 338 43 7378 2633
+-f9b88b8e87c5d99f671e63af5bd1c2dd42066eb9886c5760884a8467bda94c80 68 68 17594 7055
+-b92d5b7f1af52c6791b0e373e31a2777e625442754db2a302ae89c50d8a3ab1a 1 1 133 0
+-d3549fcbfab5e675852c417d126be6cb028b66590644f6ce86a94485b0c80226 1 1 190 0
+-5f57f61da8a6f0d28c937786101e03fdcfef344be5407ebdd86de9724a64419f 1 1 3666 0
+-a67a0b4c25a126d2e29a21b703b9465451302f8ddf4dfc08be3ab32a325d6794 55 55 12306 6020
+-94c7f32d651869ca0e0c7fdbe85e9730827847685cd99c3f5e63c98dc9b34819 1 1 8222 0
+-8fb51d720b4ee7ba83294b7b7c3de0686026975888b8427a0e9e7215c8164649 6 0 0 0
+-2f83ba1eec1d2865b09ae41427465c92d8c81fc9df8f65d3499991305cd82b0c 11 11 914 460
+-9d980c6af3f8258dc1cbc88cdc1d25655807bd42460eaf2836cd8a191cac9ddf 47 37 10166 2916
+-f1bb30d2acd848196c4b7f30dc6c7943ef7e202258bb21d915cfd58cc126045f 193 115 30463 8122
+-de6ba8aab97652af40542b51d1fa1e01d1bc451b135d3d02b97175aa3e616ece 1 1 133 0
+-e76cacc1f8e785f1453871f26503109998d866e28216fe3c17101caa942cd0fb 181 115 20562 4726
+-66dc5b10c97a9553b536fc9e21f8c1055405380fc40518360ed163e37f08e141 106 67 7176 2678
+-8a2fdefb23fd5a5b5b8e2c7e1dfe1ea8493d3fb157226860e7a901b870d38074 2 0 0 0
+-a4ca69ddc87e40597b2819b4f940fb65132fa364dd728dd5296937f254f2734f 2 2 4992 1
+-d2aa05b3bd90ca2ea58bf030b32de7e1fa5664284b33a85ec7c5f09e3795ac42 9 1 79 51
+-34e9f8726a61a08ca9bf03450902175df021404ce6c95fe0945629501a853b0d 4 2 455 376
+-022797756d4d44d31d2787741c9e7e18948b9cb7b2c4373ee0405b29b7e52b75 1 1 5017 0
+-a3f107ce49731c8c951eb7ef830b5d900713d4e41f5e92a5e58a4dd22dc6ec43 11 11 1183 368
+Index: .idea/workspace.xml
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+><?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<project version=\"4\">\n  <component name=\"AutoImportSettings\">\n    <option name=\"autoReloadType\" value=\"SELECTIVE\" />\n  </component>\n  <component name=\"ChangeListManager\">\n    <list default=\"true\" id=\"10e6ce42-b9a9-43d2-b4e7-d72b362930ec\" name=\"Changes\" comment=\"Updated light_mode.svg and dark_mode.svg for enhanced clarity and consistency&#10;&#10;- Refined programming stack display and replaced shorthand notations with full names.&#10;- Improved alignment and updated metrics (commits and LOC) to reflect recent changes.&#10;- Adjusted `.idea` workspace settings and tasks for better integration.\">\n      <change beforePath=\"$PROJECT_DIR$/.github/workflows/build.yaml\" beforeDir=\"false\" afterPath=\"$PROJECT_DIR$/.github/workflows/build.yaml\" afterDir=\"false\" />\n    </list>\n    <option name=\"SHOW_DIALOG\" value=\"false\" />\n    <option name=\"HIGHLIGHT_CONFLICTS\" value=\"true\" />\n    <option name=\"HIGHLIGHT_NON_ACTIVE_CHANGELIST\" value=\"false\" />\n    <option name=\"LAST_RESOLUTION\" value=\"IGNORE\" />\n  </component>\n  <component name=\"Git.Settings\">\n    <option name=\"RECENT_GIT_ROOT_PATH\" value=\"$PROJECT_DIR$\" />\n  </component>\n  <component name=\"GitHubPullRequestSearchHistory\">{\n  &quot;lastFilter&quot;: {\n    &quot;state&quot;: &quot;OPEN&quot;,\n    &quot;assignee&quot;: &quot;ShkoMaghdidEbrahim&quot;\n  }\n}</component>\n  <component name=\"GithubPullRequestsUISettings\">{\n  &quot;selectedUrlAndAccountId&quot;: {\n    &quot;url&quot;: &quot;https://github.com/ShkoMaghdidEbrahim/ShkoMaghdidEbrahim.git&quot;,\n    &quot;accountId&quot;: &quot;6e6203ad-02eb-488c-92d7-cabcd94e174f&quot;\n  }\n}</component>\n  <component name=\"ProjectColorInfo\">{\n  &quot;associatedIndex&quot;: 7\n}</component>\n  <component name=\"ProjectId\" id=\"36ciEbrTimdsxtT0WGYGEXdHEd2\" />\n  <component name=\"ProjectViewState\">\n    <option name=\"hideEmptyMiddlePackages\" value=\"true\" />\n    <option name=\"showLibraryContents\" value=\"true\" />\n  </component>\n  <component name=\"PropertiesComponent\"><![CDATA[{\n  \"keyToString\": {\n    \"ModuleVcsDetector.initialDetectionPerformed\": \"true\",\n    \"RunOnceActivity.ShowReadmeOnStart\": \"true\",\n    \"RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252\": \"true\",\n    \"RunOnceActivity.git.unshallow\": \"true\",\n    \"git-widget-placeholder\": \"main\",\n    \"junie.onboarding.icon.badge.shown\": \"true\",\n    \"node.js.detected.package.eslint\": \"true\",\n    \"node.js.detected.package.tslint\": \"true\",\n    \"node.js.selected.package.eslint\": \"(autodetect)\",\n    \"node.js.selected.package.tslint\": \"(autodetect)\",\n    \"nodejs_package_manager_path\": \"npm\",\n    \"settings.editor.selected.configurable\": \"com.jetbrains.python.configuration.PyActiveSdkModuleConfigurable\",\n    \"to.speed.mode.migration.done\": \"true\",\n    \"vue.rearranger.settings.migration\": \"true\"\n  }\n}]]></component>\n  <component name=\"SharedIndexes\">\n    <attachedChunks>\n      <set>\n        <option value=\"bundled-js-predefined-d6986cc7102b-9c94529fcfe0-JavaScript-WS-252.26199.162\" />\n      </set>\n    </attachedChunks>\n  </component>\n  <component name=\"SwiftWorkspaceSettings\">\n    <option name=\"detectedToolchain\" value=\"true\" />\n    <option name=\"toolchainPathValue\" value=\"/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain\" />\n  </component>\n  <component name=\"TaskManager\">\n    <task active=\"true\" id=\"Default\" summary=\"Default task\">\n      <changelist id=\"10e6ce42-b9a9-43d2-b4e7-d72b362930ec\" name=\"Changes\" comment=\"\" />\n      <created>1765312149852</created>\n      <option name=\"number\" value=\"Default\" />\n      <option name=\"presentableId\" value=\"Default\" />\n      <updated>1765312149852</updated>\n      <workItem from=\"1765312151206\" duration=\"1505000\" />\n      <workItem from=\"1765314236389\" duration=\"36000\" />\n      <workItem from=\"1765314275334\" duration=\"4562000\" />\n    </task>\n    <task id=\"LOCAL-00001\" summary=\"Add GitHub profile README with dynamic SVG stats and migration settings&#10;&#10;- Created `.idea` configuration files for migration services with &quot;COMPLETED&quot; status.&#10;- Added `README.md` with light/dark mode SVGs.&#10;- Implemented `today.py` script for dynamic stat generation via GitHub GraphQL.&#10;- Included additional resources: cache, requirements, and inspection profiles.\">\n      <option name=\"closed\" value=\"true\" />\n      <created>1765314316381</created>\n      <option name=\"number\" value=\"00001\" />\n      <option name=\"presentableId\" value=\"LOCAL-00001\" />\n      <option name=\"project\" value=\"LOCAL\" />\n      <updated>1765314316381</updated>\n    </task>\n    <task id=\"LOCAL-00002\" summary=\"Updated light_mode.svg and dark_mode.svg to improve styling consistency and spacing alignment. Removed placeholder ASCII art and redundant metadata for cleaner SVG outputs.\">\n      <option name=\"closed\" value=\"true\" />\n      <created>1765314665274</created>\n      <option name=\"number\" value=\"00002\" />\n      <option name=\"presentableId\" value=\"LOCAL-00002\" />\n      <option name=\"project\" value=\"LOCAL\" />\n      <updated>1765314665274</updated>\n    </task>\n    <task id=\"LOCAL-00003\" summary=\"Add GitHub Actions workflow for README updates and update `.idea` configuration&#10;&#10;- Created `build.yaml` to automate README updates on `main` branch pushes and nightly schedules.&#10;- Updated `.idea` files for additional Git integrations and migration settings.\">\n      <option name=\"closed\" value=\"true\" />\n      <created>1765314892603</created>\n      <option name=\"number\" value=\"00003\" />\n      <option name=\"presentableId\" value=\"LOCAL-00003\" />\n      <option name=\"project\" value=\"LOCAL\" />\n      <updated>1765314892604</updated>\n    </task>\n    <task id=\"LOCAL-00004\" summary=\"Add manual workflow dispatch trigger to GitHub Actions build configuration\">\n      <option name=\"closed\" value=\"true\" />\n      <created>1765315180693</created>\n      <option name=\"number\" value=\"00004\" />\n      <option name=\"presentableId\" value=\"LOCAL-00004\" />\n      <option name=\"project\" value=\"LOCAL\" />\n      <updated>1765315180693</updated>\n    </task>\n    <task id=\"LOCAL-00005\" summary=\"Refactored `today.py` for improved readability and functionality, updated `.idea` configuration&#10;&#10;- Simplified `today.py` by removing redundant comments and streamlining functions.&#10;- Added `.idea/misc.xml` for Python SDK configuration.&#10;- Made additional refinements in `.idea/workspace.xml` to enhance integration and workflow management.\">\n      <option name=\"closed\" value=\"true\" />\n      <created>1765318785813</created>\n      <option name=\"number\" value=\"00005\" />\n      <option name=\"presentableId\" value=\"LOCAL-00005\" />\n      <option name=\"project\" value=\"LOCAL\" />\n      <updated>1765318785813</updated>\n    </task>\n    <task id=\"LOCAL-00006\" summary=\"Update GitHub Actions workflow dependencies to latest versions\">\n      <option name=\"closed\" value=\"true\" />\n      <created>1765318826735</created>\n      <option name=\"number\" value=\"00006\" />\n      <option name=\"presentableId\" value=\"LOCAL-00006\" />\n      <option name=\"project\" value=\"LOCAL\" />\n      <updated>1765318826735</updated>\n    </task>\n    <task id=\"LOCAL-00007\" summary=\"Updated light_mode.svg and dark_mode.svg for enhanced clarity and consistency&#10;&#10;- Refined programming stack display and replaced shorthand notations with full names.&#10;- Improved alignment and updated metrics (commits and LOC) to reflect recent changes.&#10;- Adjusted `.idea` workspace settings and tasks for better integration.\">\n      <option name=\"closed\" value=\"true\" />\n      <created>1765319017832</created>\n      <option name=\"number\" value=\"00007\" />\n      <option name=\"presentableId\" value=\"LOCAL-00007\" />\n      <option name=\"project\" value=\"LOCAL\" />\n      <updated>1765319017832</updated>\n    </task>\n    <option name=\"localTasksCounter\" value=\"8\" />\n    <servers />\n  </component>\n  <component name=\"TypeScriptGeneratedFilesManager\">\n    <option name=\"version\" value=\"3\" />\n  </component>\n  <component name=\"Vcs.Log.Tabs.Properties\">\n    <option name=\"TAB_STATES\">\n      <map>\n        <entry key=\"MAIN\">\n          <value>\n            <State />\n          </value>\n        </entry>\n      </map>\n    </option>\n  </component>\n  <component name=\"VcsManagerConfiguration\">\n    <MESSAGE value=\"Add GitHub profile README with dynamic SVG stats and migration settings&#10;&#10;- Created `.idea` configuration files for migration services with &quot;COMPLETED&quot; status.&#10;- Added `README.md` with light/dark mode SVGs.&#10;- Implemented `today.py` script for dynamic stat generation via GitHub GraphQL.&#10;- Included additional resources: cache, requirements, and inspection profiles.\" />\n    <MESSAGE value=\"Updated light_mode.svg and dark_mode.svg to improve styling consistency and spacing alignment. Removed placeholder ASCII art and redundant metadata for cleaner SVG outputs.\" />\n    <MESSAGE value=\"Add GitHub Actions workflow for README updates and update `.idea` configuration&#10;&#10;- Created `build.yaml` to automate README updates on\" />\n    <MESSAGE value=\"Add GitHub Actions workflow for README updates and update `.idea` configuration&#10;&#10;- Created `build.yaml` to automate README updates on `main` branch pushes and nightly schedules.&#10;- Updated `.idea` files for additional Git integrations and migration settings.\" />\n    <MESSAGE value=\"Add manual workflow dispatch trigger to GitHub Actions build configuration\" />\n    <MESSAGE value=\"Refactor `today.py` to streamline code structure and enhance readability&#10;&#10;- Removed extensive in-line comments and redundant docstrings.&#10;- Simplified method implementations for GitHub GraphQL API usage.&#10;- Improved SVG formatting with dynamic element spacing adjustments.&#10;- Updated `.idea` files for compatibility and migration configurations.\" />\n    <MESSAGE value=\"Refactored `today.py` for improved readability and functionality, updated `.idea` configuration&#10;&#10;- Simplified `today.py` by removing redundant comments and streamlining functions.&#10;- Added `.idea/misc.xml` for Python SDK configuration.&#10;- Made additional refinements in `.idea/workspace.xml` to enhance integration and workflow management.\" />\n    <MESSAGE value=\"Update GitHub Actions workflow dependencies to latest versions\" />\n    <MESSAGE value=\"Updated light_mode.svg and dark_mode.svg for enhanced clarity and consistency&#10;&#10;- Refined programming stack display and replaced shorthand notations with full names.&#10;- Improved alignment and updated metrics (commits and LOC) to reflect recent changes.&#10;- Adjusted `.idea` workspace settings and tasks for better integration.\" />\n    <option name=\"LAST_COMMIT_MESSAGE\" value=\"Updated light_mode.svg and dark_mode.svg for enhanced clarity and consistency&#10;&#10;- Refined programming stack display and replaced shorthand notations with full names.&#10;- Improved alignment and updated metrics (commits and LOC) to reflect recent changes.&#10;- Adjusted `.idea` workspace settings and tasks for better integration.\" />\n  </component>\n</project>
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/.idea/workspace.xml b/.idea/workspace.xml
+--- a/.idea/workspace.xml	(revision 4c9efe2bcd5768305a04d5a16f2a5ff2ddb4377e)
++++ b/.idea/workspace.xml	(date 1766076130191)
+@@ -4,8 +4,12 @@
+     <option name="autoReloadType" value="SELECTIVE" />
+   </component>
+   <component name="ChangeListManager">
+-    <list default="true" id="10e6ce42-b9a9-43d2-b4e7-d72b362930ec" name="Changes" comment="Updated light_mode.svg and dark_mode.svg for enhanced clarity and consistency&#10;&#10;- Refined programming stack display and replaced shorthand notations with full names.&#10;- Improved alignment and updated metrics (commits and LOC) to reflect recent changes.&#10;- Adjusted `.idea` workspace settings and tasks for better integration.">
+-      <change beforePath="$PROJECT_DIR$/.github/workflows/build.yaml" beforeDir="false" afterPath="$PROJECT_DIR$/.github/workflows/build.yaml" afterDir="false" />
++    <list default="true" id="10e6ce42-b9a9-43d2-b4e7-d72b362930ec" name="Changes" comment="Update GitHub Actions schedule to midnight for daily build trigger">
++      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
++      <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
++      <change beforePath="$PROJECT_DIR$/dark_mode.svg" beforeDir="false" afterPath="$PROJECT_DIR$/dark_mode.svg" afterDir="false" />
++      <change beforePath="$PROJECT_DIR$/light_mode.svg" beforeDir="false" afterPath="$PROJECT_DIR$/light_mode.svg" afterDir="false" />
++      <change beforePath="$PROJECT_DIR$/today.py" beforeDir="false" afterPath="$PROJECT_DIR$/today.py" afterDir="false" />
+     </list>
+     <option name="SHOW_DIALOG" value="false" />
+     <option name="HIGHLIGHT_CONFLICTS" value="true" />
+@@ -35,24 +39,24 @@
+     <option name="hideEmptyMiddlePackages" value="true" />
+     <option name="showLibraryContents" value="true" />
+   </component>
+-  <component name="PropertiesComponent"><![CDATA[{
+-  "keyToString": {
+-    "ModuleVcsDetector.initialDetectionPerformed": "true",
+-    "RunOnceActivity.ShowReadmeOnStart": "true",
+-    "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252": "true",
+-    "RunOnceActivity.git.unshallow": "true",
+-    "git-widget-placeholder": "main",
+-    "junie.onboarding.icon.badge.shown": "true",
+-    "node.js.detected.package.eslint": "true",
+-    "node.js.detected.package.tslint": "true",
+-    "node.js.selected.package.eslint": "(autodetect)",
+-    "node.js.selected.package.tslint": "(autodetect)",
+-    "nodejs_package_manager_path": "npm",
+-    "settings.editor.selected.configurable": "com.jetbrains.python.configuration.PyActiveSdkModuleConfigurable",
+-    "to.speed.mode.migration.done": "true",
+-    "vue.rearranger.settings.migration": "true"
++  <component name="PropertiesComponent">{
++  &quot;keyToString&quot;: {
++    &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,
++    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
++    &quot;RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252&quot;: &quot;true&quot;,
++    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
++    &quot;git-widget-placeholder&quot;: &quot;main&quot;,
++    &quot;junie.onboarding.icon.badge.shown&quot;: &quot;true&quot;,
++    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
++    &quot;node.js.detected.package.tslint&quot;: &quot;true&quot;,
++    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
++    &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;,
++    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
++    &quot;settings.editor.selected.configurable&quot;: &quot;com.jetbrains.python.configuration.PyActiveSdkModuleConfigurable&quot;,
++    &quot;to.speed.mode.migration.done&quot;: &quot;true&quot;,
++    &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
+   }
+-}]]></component>
++}</component>
+   <component name="SharedIndexes">
+     <attachedChunks>
+       <set>
+@@ -73,7 +77,8 @@
+       <updated>1765312149852</updated>
+       <workItem from="1765312151206" duration="1505000" />
+       <workItem from="1765314236389" duration="36000" />
+-      <workItem from="1765314275334" duration="4562000" />
++      <workItem from="1765314275334" duration="5034000" />
++      <workItem from="1766075361887" duration="654000" />
+     </task>
+     <task id="LOCAL-00001" summary="Add GitHub profile README with dynamic SVG stats and migration settings&#10;&#10;- Created `.idea` configuration files for migration services with &quot;COMPLETED&quot; status.&#10;- Added `README.md` with light/dark mode SVGs.&#10;- Implemented `today.py` script for dynamic stat generation via GitHub GraphQL.&#10;- Included additional resources: cache, requirements, and inspection profiles.">
+       <option name="closed" value="true" />
+@@ -131,7 +136,31 @@
+       <option name="project" value="LOCAL" />
+       <updated>1765319017832</updated>
+     </task>
+-    <option name="localTasksCounter" value="8" />
++    <task id="LOCAL-00008" summary="Enhance GitHub Actions and `.idea` configuration&#10;&#10;- Added permissions and refined cache usage in `build.yaml`.&#10;- Improved commit process with skip-ci option and enhanced token usage.&#10;- Updated `.idea` workspace for improved task and settings management.">
++      <option name="closed" value="true" />
++      <created>1765319091084</created>
++      <option name="number" value="00008" />
++      <option name="presentableId" value="LOCAL-00008" />
++      <option name="project" value="LOCAL" />
++      <updated>1765319091084</updated>
++    </task>
++    <task id="LOCAL-00009" summary="Fix incorrect formatting in light_mode.svg for LOC stats display">
++      <option name="closed" value="true" />
++      <created>1765319210035</created>
++      <option name="number" value="00009" />
++      <option name="presentableId" value="LOCAL-00009" />
++      <option name="project" value="LOCAL" />
++      <updated>1765319210035</updated>
++    </task>
++    <task id="LOCAL-00010" summary="Update GitHub Actions schedule to midnight for daily build trigger">
++      <option name="closed" value="true" />
++      <created>1765319417061</created>
++      <option name="number" value="00010" />
++      <option name="presentableId" value="LOCAL-00010" />
++      <option name="project" value="LOCAL" />
++      <updated>1765319417061</updated>
++    </task>
++    <option name="localTasksCounter" value="11" />
+     <servers />
+   </component>
+   <component name="TypeScriptGeneratedFilesManager">
+@@ -158,6 +187,9 @@
+     <MESSAGE value="Refactored `today.py` for improved readability and functionality, updated `.idea` configuration&#10;&#10;- Simplified `today.py` by removing redundant comments and streamlining functions.&#10;- Added `.idea/misc.xml` for Python SDK configuration.&#10;- Made additional refinements in `.idea/workspace.xml` to enhance integration and workflow management." />
+     <MESSAGE value="Update GitHub Actions workflow dependencies to latest versions" />
+     <MESSAGE value="Updated light_mode.svg and dark_mode.svg for enhanced clarity and consistency&#10;&#10;- Refined programming stack display and replaced shorthand notations with full names.&#10;- Improved alignment and updated metrics (commits and LOC) to reflect recent changes.&#10;- Adjusted `.idea` workspace settings and tasks for better integration." />
+-    <option name="LAST_COMMIT_MESSAGE" value="Updated light_mode.svg and dark_mode.svg for enhanced clarity and consistency&#10;&#10;- Refined programming stack display and replaced shorthand notations with full names.&#10;- Improved alignment and updated metrics (commits and LOC) to reflect recent changes.&#10;- Adjusted `.idea` workspace settings and tasks for better integration." />
++    <MESSAGE value="Enhance GitHub Actions and `.idea` configuration&#10;&#10;- Added permissions and refined cache usage in `build.yaml`.&#10;- Improved commit process with skip-ci option and enhanced token usage.&#10;- Updated `.idea` workspace for improved task and settings management." />
++    <MESSAGE value="Fix incorrect formatting in light_mode.svg for LOC stats display" />
++    <MESSAGE value="Update GitHub Actions schedule to midnight for daily build trigger" />
++    <option name="LAST_COMMIT_MESSAGE" value="Update GitHub Actions schedule to midnight for daily build trigger" />
+   </component>
+ </project>
+\ No newline at end of file

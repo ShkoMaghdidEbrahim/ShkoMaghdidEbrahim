@@ -5,6 +5,7 @@ import os
 from lxml import etree
 import time
 import hashlib
+import re
 
 HEADERS = {'authorization': 'token ' + os.environ['ACCESS_TOKEN']}
 USER_NAME = os.environ['USER_NAME']
@@ -259,12 +260,46 @@ def stars_counter(data):
     return total_stars
 
 
-def svg_overwrite(filename, age_data, commit_data, star_data, repo_data, contrib_data, follower_data, loc_data):
+def committers_rank_getter(username, country='iraq'):
+    url = f"https://user-badge.committers.top/{country}/{username}.svg"
+    response = requests.get(url, timeout=15)
+    if response.status_code != 200:
+        raise Exception('committers_rank_getter has failed with a', response.status_code, response.text)
+    return extract_rank_from_committers_svg(response.text)
+
+
+def extract_rank_from_committers_svg(svg_text):
+    if re.search(r"\bunranked\b", svg_text, flags=re.IGNORECASE):
+        return 'Unranked'
+
+    match = re.search(r"#\s*([0-9][0-9,]*)", svg_text)
+    if match:
+        return int(match.group(1).replace(',', ''))
+
+    try:
+        root = etree.fromstring(svg_text.encode('utf-8'))
+        texts = [t for t in root.itertext() if t is not None]
+        normalized = ' '.join(' '.join(texts).split())
+    except Exception:
+        normalized = svg_text
+
+    match = re.search(r"\b(?:rank|ranking)\b\D{0,30}([0-9][0-9,]*)", normalized, flags=re.IGNORECASE)
+    if match:
+        return int(match.group(1).replace(',', ''))
+
+    match = re.search(r"\b([0-9][0-9,]*)\b", normalized)
+    if match:
+        return int(match.group(1).replace(',', ''))
+
+    raise ValueError('Could not extract rank from committers.top SVG')
+
+
+def svg_overwrite(filename, age_data, commit_data, rank_data, repo_data, contrib_data, follower_data, loc_data):
     tree = etree.parse(filename)
     root = tree.getroot()
     justify_format(root, 'age_data', age_data, 90)
     justify_format(root, 'commit_data', commit_data, 39)
-    justify_format(root, 'star_data', star_data, 40)
+    justify_format(root, 'rank_data', rank_data, 21)
     justify_format(root, 'repo_data', repo_data, 24)
     justify_format(root, 'contrib_data', contrib_data, 0)
     justify_format(root, 'follower_data', follower_data, 36)
@@ -358,7 +393,7 @@ if __name__ == '__main__':
     formatter('LOC (cached)', loc_time) if total_loc[-1] else formatter('LOC (no cache)', loc_time)
 
     commit_data, commit_time = perf_counter(graph_commits)
-    star_data, star_time = perf_counter(graph_repos_stars, 'stars', ['OWNER'])
+    rank_data, rank_time = perf_counter(committers_rank_getter, USER_NAME)
     repo_data, repo_time = perf_counter(graph_repos_stars, 'repos', ['OWNER'])
     contrib_data, contrib_time = perf_counter(graph_repos_stars, 'repos',
                                               ['OWNER', 'COLLABORATOR', 'ORGANIZATION_MEMBER'])
@@ -366,15 +401,15 @@ if __name__ == '__main__':
 
     for index in range(len(total_loc) - 1): total_loc[index] = '{:,}'.format(total_loc[index])
 
-    svg_overwrite('dark_mode.svg', age_data, commit_data, star_data, repo_data, contrib_data, follower_data,
+    svg_overwrite('dark_mode.svg', age_data, commit_data, rank_data, repo_data, contrib_data, follower_data,
                   total_loc[:-1])
-    svg_overwrite('light_mode.svg', age_data, commit_data, star_data, repo_data, contrib_data, follower_data,
+    svg_overwrite('light_mode.svg', age_data, commit_data, rank_data, repo_data, contrib_data, follower_data,
                   total_loc[:-1])
 
     print('\033[F\033[F\033[F\033[F\033[F\033[F\033[F\033[F',
           '{:<21}'.format('Total function time:'),
           '{:>11}'.format(
-              '%.4f' % (user_time + age_time + loc_time + commit_time + star_time + repo_time + contrib_time)),
+              '%.4f' % (user_time + age_time + loc_time + commit_time + rank_time + repo_time + contrib_time)),
           ' s \033[E\033[E\033[E\033[E\033[E\033[E\033[E\033[E', sep='')
 
     print('Total GitHub GraphQL API calls:', '{:>3}'.format(sum(QUERY_COUNT.values())))
