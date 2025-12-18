@@ -4,14 +4,7 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="10e6ce42-b9a9-43d2-b4e7-d72b362930ec" name="Changes" comment="Update GitHub Actions schedule to midnight for daily build trigger">
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/cache/3c602b29c40b778847fb76f04a127ddbcba0678c0c67c3052dd7c939fce19682.txt" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/dark_mode.svg" beforeDir="false" afterPath="$PROJECT_DIR$/dark_mode.svg" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/light_mode.svg" beforeDir="false" afterPath="$PROJECT_DIR$/light_mode.svg" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/today.py" beforeDir="false" afterPath="$PROJECT_DIR$/today.py" afterDir="false" />
-    </list>
+    <list default="true" id="10e6ce42-b9a9-43d2-b4e7-d72b362930ec" name="Changes" comment="Update GitHub Actions cron schedule to 9 PM daily" />
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -79,7 +72,7 @@
       <workItem from="1765312151206" duration="1505000" />
       <workItem from="1765314236389" duration="36000" />
       <workItem from="1765314275334" duration="5034000" />
-      <workItem from="1766075361887" duration="1044000" />
+      <workItem from="1766075361887" duration="1378000" />
     </task>
     <task id="LOCAL-00001" summary="Add GitHub profile README with dynamic SVG stats and migration settings&#10;&#10;- Created `.idea` configuration files for migration services with &quot;COMPLETED&quot; status.&#10;- Added `README.md` with light/dark mode SVGs.&#10;- Implemented `today.py` script for dynamic stat generation via GitHub GraphQL.&#10;- Included additional resources: cache, requirements, and inspection profiles.">
       <option name="closed" value="true" />
@@ -161,7 +154,31 @@
       <option name="project" value="LOCAL" />
       <updated>1765319417061</updated>
     </task>
-    <option name="localTasksCounter" value="11" />
+    <task id="LOCAL-00011" summary="Add ranking integration from committers.top into README and GitHub profile visuals&#10;&#10;- Implemented `committers_rank_getter` to fetch and process user ranking from committers.top.&#10;- Updated `today.py` to replace star stats with ranking in visual output.&#10;- Refined `svg_overwrite` to support rank data rendering.&#10;- Improved README links and visuals for updated repo name and profile graphics.">
+      <option name="closed" value="true" />
+      <created>1766076580235</created>
+      <option name="number" value="00011" />
+      <option name="presentableId" value="LOCAL-00011" />
+      <option name="project" value="LOCAL" />
+      <updated>1766076580235</updated>
+    </task>
+    <task id="LOCAL-00012" summary="Corrected email formatting in `light_mode.svg` and `dark_mode.svg` for consistency.">
+      <option name="closed" value="true" />
+      <created>1766076689536</created>
+      <option name="number" value="00012" />
+      <option name="presentableId" value="LOCAL-00012" />
+      <option name="project" value="LOCAL" />
+      <updated>1766076689536</updated>
+    </task>
+    <task id="LOCAL-00013" summary="Update GitHub Actions cron schedule to 9 PM daily">
+      <option name="closed" value="true" />
+      <created>1766076769584</created>
+      <option name="number" value="00013" />
+      <option name="presentableId" value="LOCAL-00013" />
+      <option name="project" value="LOCAL" />
+      <updated>1766076769584</updated>
+    </task>
+    <option name="localTasksCounter" value="14" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -191,6 +208,10 @@
     <MESSAGE value="Enhance GitHub Actions and `.idea` configuration&#10;&#10;- Added permissions and refined cache usage in `build.yaml`.&#10;- Improved commit process with skip-ci option and enhanced token usage.&#10;- Updated `.idea` workspace for improved task and settings management." />
     <MESSAGE value="Fix incorrect formatting in light_mode.svg for LOC stats display" />
     <MESSAGE value="Update GitHub Actions schedule to midnight for daily build trigger" />
-    <option name="LAST_COMMIT_MESSAGE" value="Update GitHub Actions schedule to midnight for daily build trigger" />
+    <MESSAGE value="Add ranking integration from committers.top into README and GitHub profile visuals&#10;&#10;- Implemented `committers_rank_getter` to fetch and process user ranking from committers.top.&#10;- Updated `today.py` to replace star stats with ranking in visual output.&#10;- Refined `svg_overwrite` to support rank data rendering.&#10;- Improved" />
+    <MESSAGE value="Add ranking integration from committers.top into README and GitHub profile visuals&#10;&#10;- Implemented `committers_rank_getter` to fetch and process user ranking from committers.top.&#10;- Updated `today.py` to replace star stats with ranking in visual output.&#10;- Refined `svg_overwrite` to support rank data rendering.&#10;- Improved README links and visuals for updated repo name and profile graphics." />
+    <MESSAGE value="Corrected email formatting in `light_mode.svg` and `dark_mode.svg` for consistency." />
+    <MESSAGE value="Update GitHub Actions cron schedule to 9 PM daily" />
+    <option name="LAST_COMMIT_MESSAGE" value="Update GitHub Actions cron schedule to 9 PM daily" />
   </component>
 </project>
