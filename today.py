@@ -40,7 +40,7 @@ def fetch_streak(username):
     Fetches GitHub streak data.
     The API returns an SVG; we parse the 'Current Streak' value from the XML.
     """
-    url = f"https://github-readme-streak-stats.herokuapp.com/?user={username}&format=json"
+    url = f"https://github-readme-streak-stats.herokuapp.com/?user={username}"
     for delay in [1, 2, 4]:
         try:
             response = requests.get(url, timeout=15)
