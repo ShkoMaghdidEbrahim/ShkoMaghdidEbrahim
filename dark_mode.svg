@@ -28,7 +28,7 @@
     <text x="120" y="90" class="d-subtitle">Fullstack Engineer @ Lezzoo</text>
 
     <text x="50" y="135" class="d-body-text">Uptime:</text>
-    <text x="110" y="135" id="age_data" class="d-mono">22 years, 11 months, 25 days</text>
+    <text x="110" y="135" id="age_data" class="d-mono">22 years, 11 months, 26 days</text>
 
     <!-- OS Chips -->
     <g transform="translate(50, 160)">
@@ -51,7 +51,7 @@
     <!-- Rank Card -->
     <rect x="734" y="24" width="227" height="180" rx="24" fill="#4F378B"/>
     <text x="754" y="55" class="d-label" fill="#EADDFF" fill-opacity="0.7">Global Rank</text>
-    <text x="754" y="140" id="rank_data" class="d-stat-value" style="font-size: 54px;">#34</text>
+    <text x="754" y="140" id="rank_data" class="d-stat-value" style="font-size: 54px;">#33</text>
     <text x="754" y="170" class="d-body-text" fill="#EADDFF" font-size="12">Top Contributor</text>
 
     <!-- Tech Stack Card -->
@@ -84,13 +84,13 @@
     <rect x="618" y="410" width="319" height="12" rx="6" fill="#49454F"/>
     <rect x="618" y="410" width="260" height="12" rx="6" fill="#D0BCFF"/>
 
-    <text x="618" y="450" id="loc_add" class="d-mono d-add-color" font-size="11">++ 469,051</text>
-    <text x="943" y="450" text-anchor="end" id="loc_del" class="d-mono d-del-color" font-size="11">-- 74,376</text>
+    <text x="618" y="450" id="loc_add" class="d-mono d-add-color" font-size="11">++ 469,059</text>
+    <text x="943" y="450" text-anchor="end" id="loc_del" class="d-mono d-del-color" font-size="11">-- 74,384</text>
 
     <!-- Footer -->
     <rect x="24" y="504" width="937" height="52" rx="16" fill="#49454F"/>
     <text x="48" y="535" class="d-body-text" font-weight="500" font-size="12">Shkoma.ranya@gmail.com | LinkedIn: Shko Maghdid</text>
-    <text x="940" y="535" text-anchor="end" id="commit_data" class="d-mono" font-size="12" fill-opacity="0.6">Commits: 2514</text>
+    <text x="940" y="535" text-anchor="end" id="commit_data" class="d-mono" font-size="12" fill-opacity="0.6">Commits: 2515</text>
 
     <!-- Hidden / script-required elements -->
     <text id="follower_data" display="none">12</text>
